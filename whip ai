@@ -1,0 +1,620 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { 
+  Plus, 
+  Check, 
+  Trash2, 
+  Settings2, 
+  History, 
+  Wand2, 
+  Layers, 
+  Download, 
+  Maximize2, 
+  RefreshCw, 
+  Heart, 
+  Copy, 
+  ChevronRight, 
+  ChevronLeft,
+  Image as ImageIcon,
+  Type,
+  Layout,
+  Sliders,
+  MoreHorizontal,
+  X,
+  Zap,
+  Clock,
+  ArrowUpCircle,
+  Hash,
+  AlertCircle,
+  CheckCircle2
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+
+// --- Types & Constants ---
+const ACCENT_COLOR = 'bg-yellow-400 text-black';
+const ACCENT_BORDER = 'border-yellow-400';
+const ACCENT_TEXT = 'text-yellow-500';
+
+const INITIAL_REFERENCES = [
+  { id: '1', type: 'subject', url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&q=80', active: true, weight: 0.95 },
+  { id: '2', type: 'scene', url: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=400&q=80', active: false, weight: 0.5 },
+  { id: '3', type: 'style', url: 'https://images.unsplash.com/photo-1541701494587-cb58502866ab?w=400&q=80', active: true, weight: 0.9 },
+];
+
+const MOCK_MODELS = [
+  { id: 'nano-banana-pro', name: 'Nano Banana Pro', version: 'Ultra', premium: true },
+  { id: 'flux-1', name: 'Flux.1 Dev', version: 'v1.0', premium: false },
+  { id: 'sdxl-turbo', name: 'SDXL Turbo', version: 'v2.1', premium: false },
+];
+
+// --- Helper Functions ---
+const downloadImage = async (url, filename) => {
+  try {
+    if (url.startsWith('data:')) {
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return;
+    }
+    const response = await fetch(url);
+    const blob = await response.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(blobUrl);
+  } catch (error) {
+    console.error("Download failed", error);
+  }
+};
+
+const toBase64 = (url) => new Promise((resolve, reject) => {
+  const img = new Image();
+  img.crossOrigin = 'Anonymous';
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    const dataURL = canvas.toDataURL('image/png');
+    resolve(dataURL.split(',')[1]);
+  };
+  img.onerror = reject;
+  img.src = url;
+});
+
+const getAspectClass = (ratio) => {
+  switch (ratio) {
+    case '1:1': return 'aspect-square';
+    case '16:9': return 'aspect-video';
+    case '9:16': return 'aspect-[9/16]';
+    case '4:3': return 'aspect-[4/3]';
+    case '3:4': return 'aspect-[3/4]';
+    case '21:9': return 'aspect-[21/9]';
+    default: return 'aspect-[3/4]';
+  }
+};
+
+// --- Components ---
+
+const ReferenceCard = ({ item, onToggle, onDelete, onWeightChange }) => (
+  <motion.div 
+    layout
+    initial={{ opacity: 0, scale: 0.9 }}
+    animate={{ opacity: 1, scale: 1 }}
+    className={`relative group rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${item.active ? ACCENT_BORDER : 'border-transparent bg-gray-100 dark:bg-gray-800'}`}
+  >
+    <img src={item.url} alt="Ref" className="w-full aspect-square object-cover" onClick={() => onToggle(item.id)} />
+    
+    <div className="absolute top-2 left-2 flex gap-1">
+      <button 
+        onClick={() => onToggle(item.id)}
+        className={`w-6 h-6 rounded-full flex items-center justify-center shadow-lg transition-colors ${item.active ? ACCENT_COLOR : 'bg-white/80 text-gray-400'}`}
+      >
+        <Check size={14} strokeWidth={3} />
+      </button>
+    </div>
+
+    <button 
+      onClick={() => onDelete(item.id)}
+      className="absolute top-2 right-2 w-6 h-6 bg-black/50 hover:bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+    >
+      <X size={12} />
+    </button>
+
+    <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="flex flex-col gap-1">
+        <div className="flex justify-between text-[10px] text-white font-medium">
+          <span>Influence</span>
+          <span>{Math.round(item.weight * 100)}%</span>
+        </div>
+        <input 
+          type="range" 
+          min="0" 
+          max="1" 
+          step="0.01" 
+          value={item.weight} 
+          onChange={(e) => onWeightChange(item.id, parseFloat(e.target.value))}
+          className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-yellow-400"
+        />
+      </div>
+    </div>
+  </motion.div>
+);
+
+const GenerationCard = ({ image }) => {
+  const [isHovered, setIsHovered] = useState(false);
+  const [downloaded, setDownloaded] = useState(false);
+
+  const handleDownloadClick = async (e) => {
+    e.stopPropagation();
+    await downloadImage(image.url, `whipai-gen-${image.id}.png`);
+    setDownloaded(true);
+    setTimeout(() => setDownloaded(false), 2000);
+  };
+
+  const aspectClass = getAspectClass(image.ratio || '3:4');
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      className="relative rounded-2xl overflow-hidden bg-white shadow-xl group border border-gray-100 mb-6 break-inside-avoid"
+    >
+      <div className={`${aspectClass} bg-gray-200 relative overflow-hidden transition-all duration-300`}>
+        {image.loading ? (
+          <div className="absolute inset-0 bg-gradient-to-r from-gray-200 via-gray-100 to-gray-200 animate-shimmer" 
+               style={{ backgroundSize: '200% 100%' }} />
+        ) : (
+          <img src={image.url} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" alt="Generated" />
+        )}
+      </div>
+
+      <AnimatePresence>
+        {isHovered && !image.loading && (
+          <motion.div 
+            initial={{ opacity: 0 }} 
+            animate={{ opacity: 1 }} 
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-black/30 flex flex-col justify-between p-4"
+          >
+            <div className="flex justify-end gap-2">
+              <button className="w-9 h-9 bg-white/90 hover:bg-white rounded-full flex items-center justify-center text-gray-700 shadow-sm transition-all active:scale-95">
+                <Heart size={18} />
+              </button>
+              <button 
+                onClick={handleDownloadClick}
+                className={`w-9 h-9 rounded-full flex items-center justify-center shadow-sm transition-all active:scale-95 ${downloaded ? 'bg-green-500 text-white' : 'bg-white/90 hover:bg-white text-gray-700'}`}
+              >
+                {downloaded ? <Check size={18} /> : <Download size={18} />}
+              </button>
+            </div>
+            
+            <div className="flex gap-2">
+              <button className="flex-1 h-10 bg-white text-black font-semibold rounded-lg flex items-center justify-center gap-2 text-sm shadow-lg active:scale-95 transition-transform">
+                <ArrowUpCircle size={16} /> Upscale
+              </button>
+              <button className="w-10 h-10 bg-black/50 text-white rounded-lg flex items-center justify-center backdrop-blur-md">
+                <RefreshCw size={16} />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+};
+
+export default function App() {
+  const [references, setReferences] = useState(INITIAL_REFERENCES);
+  const [prompt, setPrompt] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [history, setHistory] = useState([]);
+  const [activeTab, setActiveTab] = useState('controls');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [errorMessage, setErrorMessage] = useState(null);
+  const [settings, setSettings] = useState({
+    aspectRatio: '16:9',
+    model: 'nano-banana-pro',
+    steps: 25,
+    cfg: 12.0,
+    seed: -1
+  });
+
+  const apiKey = ""; 
+
+  const callMultimodalGeneration = async (promptText, referenceImages, requestedRatio) => {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`;
+    
+    const parts = [
+      { text: `SYSTEM: Act as a professional high-fidelity image generation engine for Whip AI. 
+                TASK: Generate an image in ${requestedRatio} aspect ratio.
+                PROMPT: "${promptText}".
+                
+                MANDATORY:
+                1. FORMAT: The output image MUST be strictly ${requestedRatio}.
+                2. IDENTITIY: If 'subject' reference is provided, maintain exact facial bone structure.
+                3. STYLE: Match the aesthetic of style references at the specified weight.
+                
+                REFERENCES ATTACHED:` }
+    ];
+
+    for (const ref of referenceImages) {
+      const base64Data = await toBase64(ref.url);
+      parts.push({ text: `--- REFERENCE TYPE: ${ref.type.toUpperCase()} | INFLUENCE: ${Math.round(ref.weight * 100)}% ---` });
+      parts.push({
+        inlineData: {
+          mimeType: "image/png",
+          data: base64Data
+        }
+      });
+    }
+
+    parts.push({ text: `Final instruction: Generate ONE image in exactly ${requestedRatio} ratio. Output ONLY the image.` });
+
+    const payload = {
+      contents: [{ role: "user", parts }],
+      generationConfig: {
+        responseModalities: ["IMAGE"]
+      }
+    };
+
+    let retries = 0;
+    const maxRetries = 5;
+
+    while (retries <= maxRetries) {
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) throw new Error('Generation failed');
+        const result = await response.json();
+        const base64 = result.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
+        
+        if (!base64) throw new Error('No image data returned');
+        return `data:image/png;base64,${base64}`;
+      } catch (err) {
+        if (retries === maxRetries) throw err;
+        const delay = Math.pow(2, retries) * 1000;
+        await new Promise(resolve => setTimeout(resolve, delay));
+        retries++;
+      }
+    }
+  };
+
+  const generateImage = async () => {
+    if (!prompt.trim()) return;
+    setIsGenerating(true);
+    setErrorMessage(null);
+    
+    const currentRatio = settings.aspectRatio;
+    // Create two separate generation IDs for two parallel tasks
+    const genId1 = Date.now();
+    const genId2 = Date.now() + 1;
+
+    const newGen1 = { id: genId1, url: '', loading: true, ratio: currentRatio };
+    const newGen2 = { id: genId2, url: '', loading: true, ratio: currentRatio };
+    
+    setHistory(prev => [newGen1, newGen2, ...prev]);
+
+    const activeRefs = references.filter(r => r.active);
+
+    const performTask = async (genId) => {
+      try {
+        let imageUrl;
+        if (settings.model === 'nano-banana-pro') {
+          imageUrl = await callMultimodalGeneration(prompt, activeRefs, currentRatio);
+        } else {
+          await new Promise(r => setTimeout(r, 2000));
+          imageUrl = `https://picsum.photos/seed/${genId}/800/1200`;
+        }
+
+        setHistory(prev => prev.map(item => 
+          item.id === genId 
+            ? { ...item, loading: false, url: imageUrl } 
+            : item
+        ));
+      } catch (err) {
+        setErrorMessage("Whip AI encountered an issue generating one of the images.");
+        setHistory(prev => prev.filter(item => item.id !== genId));
+      }
+    };
+
+    // Run both generations simultaneously
+    Promise.all([performTask(genId1), performTask(genId2)]).finally(() => {
+      setIsGenerating(false);
+    });
+  };
+
+  const handleToggleRef = (id) => {
+    setReferences(prev => prev.map(r => r.id === id ? { ...r, active: !r.active } : r));
+  };
+
+  const handleWeightChange = (id, weight) => {
+    setReferences(prev => prev.map(r => r.id === id ? { ...r, weight } : r));
+  };
+
+  const handleDeleteRef = (id) => {
+    setReferences(prev => prev.filter(r => r.id !== id));
+  };
+
+  const addReference = (type) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const url = URL.createObjectURL(file);
+        setReferences(prev => [...prev, {
+          id: Date.now().toString(),
+          type,
+          url,
+          active: true,
+          weight: 0.9
+        }]);
+      }
+    };
+    input.click();
+  };
+
+  return (
+    <div className="flex h-screen w-full bg-[#f8f9fa] text-gray-900 font-sans overflow-hidden">
+      
+      {/* --- LEFT SIDEBAR --- */}
+      <motion.aside 
+        animate={{ width: sidebarCollapsed ? 0 : 340 }}
+        className="relative bg-white border-r border-gray-200 flex flex-col shadow-sm z-30"
+      >
+        <div className="p-6 overflow-y-auto flex-1 custom-scrollbar">
+          <div className="flex items-center justify-between mb-8">
+            <h1 className="text-xl font-bold tracking-tight flex items-center gap-2">
+              <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center">
+                <Zap className="text-yellow-400 fill-yellow-400" size={18} />
+              </div>
+              Whip AI
+            </h1>
+            <div className="px-2 py-1 bg-yellow-100 text-yellow-800 text-[10px] font-bold rounded uppercase tracking-wider">PRO</div>
+          </div>
+
+          {['subject', 'scene', 'style'].map((type) => (
+            <div key={type} className="mb-10">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xs font-bold uppercase tracking-widest text-gray-400">{type}</h3>
+                <span className="text-[10px] font-medium text-gray-400">
+                  {references.filter(r => r.type === type && r.active).length} Active
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                {references.filter(r => r.type === type).map(ref => (
+                  <ReferenceCard 
+                    key={ref.id} 
+                    item={ref} 
+                    onToggle={handleToggleRef} 
+                    onDelete={handleDeleteRef}
+                    onWeightChange={handleWeightChange}
+                  />
+                ))}
+                <button 
+                  onClick={() => addReference(type)}
+                  className="aspect-square border-2 border-dashed border-gray-200 rounded-xl flex flex-col items-center justify-center gap-2 text-gray-400 hover:border-yellow-400 hover:text-yellow-500 transition-all group"
+                >
+                  <Plus size={24} className="group-hover:scale-110 transition-transform" />
+                  <span className="text-[10px] font-bold">Add {type}</span>
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <button 
+          onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+          className="absolute -right-4 top-1/2 -translate-y-1/2 w-8 h-8 bg-white border border-gray-200 rounded-full shadow-md flex items-center justify-center z-50 hover:bg-gray-50"
+        >
+          {sidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+        </button>
+      </motion.aside>
+
+      {/* --- MAIN GENERATION AREA --- */}
+      <main className="flex-1 flex flex-col relative overflow-hidden bg-gray-50/50">
+        <div className="flex-1 overflow-y-auto p-12 pb-40">
+          <div className="max-w-6xl mx-auto">
+            {errorMessage && (
+              <motion.div 
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mb-8 p-4 bg-red-50 border border-red-200 rounded-2xl flex items-center gap-3 text-red-600 text-sm font-medium shadow-sm"
+              >
+                <AlertCircle size={18} />
+                {errorMessage}
+                <button onClick={() => setErrorMessage(null)} className="ml-auto hover:bg-red-100 p-1 rounded">
+                  <X size={14} />
+                </button>
+              </motion.div>
+            )}
+
+            {history.length === 0 ? (
+              <div className="h-[60vh] flex flex-col items-center justify-center text-center opacity-40">
+                <div className="w-20 h-20 bg-gray-200 rounded-3xl flex items-center justify-center mb-6">
+                  <ImageIcon size={40} />
+                </div>
+                <h2 className="text-2xl font-bold mb-2">Welcome to Whip AI</h2>
+                <p className="max-w-xs text-sm">Design high-fidelity visuals. Each prompt generates two variations for review.</p>
+              </div>
+            ) : (
+              <div className="columns-1 sm:columns-2 gap-6 w-full">
+                {history.map(item => (
+                  <GenerationCard key={item.id} image={item} />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* --- BOTTOM PROMPT BAR --- */}
+        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 w-full max-w-3xl px-6">
+          <div className="bg-white/80 backdrop-blur-2xl border border-white shadow-2xl rounded-3xl p-3 flex flex-col gap-3">
+            <div className="flex items-end gap-3 p-1">
+              <div className="flex-1 relative">
+                <textarea 
+                  rows={1}
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="What should Whip AI create today?"
+                  className="w-full bg-transparent border-none focus:ring-0 text-lg py-2 resize-none max-h-32 placeholder:text-gray-400 font-medium"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      generateImage();
+                    }
+                  }}
+                />
+              </div>
+              <button 
+                onClick={generateImage}
+                disabled={isGenerating || !prompt.trim()}
+                className={`h-14 px-8 rounded-2xl flex items-center gap-2 font-bold transition-all shadow-lg active:scale-95 disabled:opacity-50 disabled:grayscale ${ACCENT_COLOR}`}
+              >
+                {isGenerating ? <RefreshCw className="animate-spin" size={20} /> : <Wand2 size={20} />}
+                {isGenerating ? 'Whipping (x2)...' : 'Generate'}
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between border-t border-gray-100 pt-3 px-2">
+              <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 rounded-lg text-xs font-bold text-gray-700">
+                  <Layout size={14} className="text-gray-500" /> {settings.aspectRatio}
+                </div>
+                <div className="w-[1px] h-4 bg-gray-200 mx-1" />
+                <button className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-gray-100 rounded-lg text-xs font-semibold transition-colors text-yellow-600">
+                  <Zap size={14} /> Dual-Gen Mode
+                </button>
+              </div>
+              
+              <div className="flex items-center gap-2 text-[10px] font-bold text-gray-400 uppercase tracking-tighter">
+                <Clock size={12} /> Generating 2 Variations
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {/* --- RIGHT CONTROL PANEL --- */}
+      <aside className="w-80 bg-[#1a1c1e] text-gray-300 flex flex-col border-l border-white/5 z-30">
+        <div className="flex border-b border-white/10">
+          {[
+            { id: 'controls', icon: Sliders },
+            { id: 'history', icon: History },
+            { id: 'settings', icon: Settings2 }
+          ].map(tab => (
+            <button 
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex-1 py-4 flex justify-center border-b-2 transition-all ${activeTab === tab.id ? 'border-yellow-400 text-yellow-400 bg-white/5' : 'border-transparent text-gray-500'}`}
+            >
+              <tab.icon size={20} />
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar-dark">
+          {activeTab === 'controls' && (
+            <>
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500 block mb-4">Core Model</label>
+                <div className="space-y-2">
+                  {MOCK_MODELS.map(model => (
+                    <div 
+                      key={model.id}
+                      onClick={() => setSettings({...settings, model: model.id})}
+                      className={`p-3 rounded-xl border cursor-pointer transition-all ${settings.model === model.id ? 'bg-yellow-400/10 border-yellow-400/50 text-white' : 'bg-white/5 border-transparent hover:bg-white/10'}`}
+                    >
+                      <div className="flex justify-between items-center">
+                        <div className="flex flex-col">
+                          <span className="font-semibold text-sm">{model.name}</span>
+                        </div>
+                        <span className="text-[10px] bg-white/10 px-1.5 py-0.5 rounded uppercase">{model.version}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500 block mb-4">Aspect Ratio</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {['1:1', '3:4', '16:9', '9:16', '4:3', '21:9'].map(ratio => (
+                    <button 
+                      key={ratio}
+                      onClick={() => setSettings({...settings, aspectRatio: ratio})}
+                      className={`py-2 rounded-lg text-xs font-bold border transition-all ${settings.aspectRatio === ratio ? 'bg-white text-black border-white' : 'border-white/10 text-gray-500 hover:border-white/30'}`}
+                    >
+                      {ratio}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-6">
+                <div>
+                  <div className="flex justify-between items-center mb-3">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Ref. Fidelity (CFG)</label>
+                    <span className="text-xs font-mono text-yellow-400">{settings.cfg}</span>
+                  </div>
+                  <input 
+                    type="range" min="1" max="25" step="0.5" 
+                    value={settings.cfg} 
+                    onChange={(e) => setSettings({...settings, cfg: parseFloat(e.target.value)})}
+                    className="w-full accent-yellow-400"
+                  />
+                </div>
+              </div>
+            </>
+          )}
+
+          {activeTab === 'history' && (
+            <div className="grid grid-cols-2 gap-2">
+              {history.map(item => (
+                <div key={item.id} className="aspect-square bg-white/5 rounded-lg overflow-hidden cursor-pointer hover:ring-2 ring-yellow-400 transition-all">
+                  {!item.loading && <img src={item.url} className="w-full h-full object-cover opacity-60 hover:opacity-100" />}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="p-4 bg-black/40 border-t border-white/5">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-bold uppercase text-gray-600">Credits</span>
+            <span className="text-xs font-mono text-white">WHIP PRO PLAN</span>
+          </div>
+          <div className="w-full bg-white/5 h-1 rounded-full overflow-hidden">
+            <div className="bg-yellow-400 h-full w-full" />
+          </div>
+        </div>
+      </aside>
+
+      <style>{`
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 10px; }
+        .custom-scrollbar-dark::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar-dark::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar-dark::-webkit-scrollbar-thumb { background: #374151; border-radius: 10px; }
+        @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+        .animate-shimmer { animation: shimmer 1.5s infinite linear; }
+      `}</style>
+    </div>
+  );
+}
